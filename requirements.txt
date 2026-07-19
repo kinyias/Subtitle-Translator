@@ -1,0 +1,6 @@
+# Runtime dependencies for Subtitle Translate Studio (Python 3.12)
+requests==2.32.3
+customtkinter==5.2.2
+
+# Build tooling (not required at runtime)
+pyinstaller==6.10.0
