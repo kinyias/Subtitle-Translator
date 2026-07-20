@@ -3,7 +3,7 @@
   "default_language": "vi-VN",
   "api_timeout": 60,
   "auto_scroll_logs": true,
-  "window_geometry": "1150x880+116+42",
+  "window_geometry": "1150x880+187+73",
   "ai_base_url": "http://localhost:20128/v1/chat/completions",
   "ai_api_key": "sk-0d1d295eb7ccebbd-2qy7kh-e2934c49",
   "ai_model": "gemini",

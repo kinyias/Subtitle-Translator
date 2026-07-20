@@ -22,8 +22,8 @@ warning) so the pipeline still works, just without the size optimization.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
@@ -92,8 +92,10 @@ def prepare_audio_for_upload(
     """Return ``(upload_path, cleanup)`` for *input_path*.
 
     When the input is a video or a large audio file and ffmpeg is available, a
-    compact temporary MP3 is produced and its path returned; ``cleanup`` deletes
-    it. Otherwise the original path is returned and ``cleanup`` is a no-op.
+    compact MP3 is produced under the ``Temp`` folder at the app root (named
+    after the source file) and its path returned. The extracted file is kept
+    on disk, so ``cleanup`` is always a no-op. Otherwise the original path is
+    returned unchanged.
     """
     noop: Callable[[], None] = lambda: None
 
@@ -109,14 +111,7 @@ def prepare_audio_for_upload(
         )
         return input_path, noop
 
-    fd, out_path = tempfile.mkstemp(prefix="subtrans_audio_", suffix=".mp3")
-    os.close(fd)
-
-    def cleanup() -> None:
-        try:
-            os.remove(out_path)
-        except OSError:
-            pass
+    out_path = str(_temp_output_path(input_path))
 
     try:
         size_in = os.path.getsize(input_path)
@@ -148,13 +143,11 @@ def prepare_audio_for_upload(
             creationflags=_NO_WINDOW,
         )
     except OSError as exc:
-        cleanup()
         logger.warning(f"Could not run ffmpeg ({exc}); uploading original file.")
         return input_path, noop
 
     if proc.returncode != 0 or not os.path.getsize(out_path):
         tail = (proc.stdout or b"").decode("utf-8", "replace")[-500:]
-        cleanup()
         logger.warning(
             f"ffmpeg extraction failed (exit {proc.returncode}); uploading "
             f"original file.\n{tail}"
@@ -163,8 +156,22 @@ def prepare_audio_for_upload(
 
     size_out = os.path.getsize(out_path)
     ratio = f" ({size_in / size_out:.0f}x smaller)" if size_out and size_in else ""
-    logger.success(f"Extracted audio: {_human(size_out)}{ratio}.")
-    return out_path, cleanup
+    logger.success(f"Extracted audio saved to '{out_path}': {_human(size_out)}{ratio}.")
+    return out_path, noop
+
+
+def _temp_output_path(input_path: str) -> Path:
+    """Build the extracted-audio path under ``<app root>/Temp``.
+
+    The folder is created if missing and the output is named after the source
+    file (``<stem>.mp3``), so repeated runs on the same input overwrite rather
+    than pile up. Non-filesystem-safe characters in the stem are replaced.
+    """
+    temp_dir = base_dir() / "Temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    stem = Path(input_path).stem or "audio"
+    safe_stem = re.sub(r'[<>:"/\\|?*]', "_", stem).strip() or "audio"
+    return temp_dir / f"{safe_stem}.mp3"
 
 
 def _human(size: int) -> str:
