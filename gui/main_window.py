@@ -10,10 +10,11 @@ from gui.context import AppContext
 from gui.pages.base_page import BasePage
 from gui.pages.logs_page import LogsPage
 from gui.pages.settings_page import SettingsPage
+from gui.pages.srt_page import SrtPage
 from gui.pages.subtitle_page import SubtitlePage
 from gui.widgets.status_bar import StatusBar
 
-NAV_ITEMS = ["Subtitle", "Settings", "Logs"]
+NAV_ITEMS = ["Subtitle", "SRT Translate", "Settings", "Logs"]
 
 
 class MainWindow(ctk.CTkFrame):
@@ -64,6 +65,8 @@ class MainWindow(ctk.CTkFrame):
         set_status = self._status_bar.set_state
         if name == "Subtitle":
             return SubtitlePage(self._content, self.context, set_status)
+        if name == "SRT Translate":
+            return SrtPage(self._content, self.context, set_status)
         if name == "Settings":
             return SettingsPage(self._content, self.context, set_status, on_theme_change=self._apply_theme)
         if name == "Logs":

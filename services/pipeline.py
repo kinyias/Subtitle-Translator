@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from services import capcut_api, results
+from services.audio_extract import prepare_audio_for_upload
 from services.base import ServiceError, TaskResult
 from services.query_service import QueryRequest, QueryService, QueryType
 from services.stt_service import STTRequest, STTService
@@ -25,8 +26,8 @@ from services.uploader import UploaderService
 from utils.helpers import extract_task_ids
 from utils.logger import AppLogger
 
-_POLL_INTERVAL_S = 2.0
-_POLL_TIMEOUT_S = 180.0
+_POLL_INTERVAL_S = 5.0
+_POLL_TIMEOUT_S = 1000.0
 
 
 @dataclass
@@ -127,8 +128,14 @@ class SubtitlePipeline:
         translator_config: Optional[TranslatorConfig],
     ) -> SubtitleResult:
         _require_requests()
-        self._logger.info(f"Uploading '{audio_path}' ...")
-        upload = self._uploader.upload(audio_path, device)
+        # Large videos are transcoded to a compact audio track first so the
+        # upload stays small and memory-friendly (see audio_extract).
+        upload_path, cleanup = prepare_audio_for_upload(audio_path, self._logger)
+        try:
+            self._logger.info(f"Uploading '{upload_path}' ...")
+            upload = self._uploader.upload(upload_path, device)
+        finally:
+            cleanup()
         if not upload.vid or not upload.md5:
             raise ServiceError("Upload did not return a vid/md5; cannot start recognition.")
         self._logger.info(f"Uploaded (vid={upload.vid}); submitting recognition ...")
@@ -167,4 +174,28 @@ class SubtitlePipeline:
         return SubtitleResult(
             entries=entries, translated=translated, task_id=task_id,
             detail=detail, final_response=final,
+        )
+
+    def translate_entries(
+        self,
+        entries: List[SubtitleEntry],
+        translator_config: TranslatorConfig,
+    ) -> SubtitleResult:
+        """AI-translate already-parsed cues (e.g. loaded from an SRT file).
+
+        No upload or recognition happens; only the ``text`` of each cue is
+        translated and stored in ``translated``. Timings are untouched, so the
+        exported SRT keeps the source file's timeframe.
+        """
+        if not entries:
+            raise ServiceError("No subtitle cues to translate.")
+        self._logger.info(f"Translating {len(entries)} subtitle segment(s) with AI ...")
+        texts = [e.text for e in entries]
+        out = self._translator.translate_segments(texts, translator_config, self._logger)
+        for entry, value in zip(entries, out):
+            entry.translated = value
+        self._logger.success("AI translation complete.")
+        return SubtitleResult(
+            entries=entries, translated=True,
+            detail=f"{len(entries)} segment(s) + translated",
         )

@@ -17,6 +17,18 @@ try:
 except ImportError:  # keep dry-run usable without requests
     requests = None
 
+try:  # optional: route retry notices into the app log when available
+    from utils.logger import logger as _app_logger
+except Exception:  # pragma: no cover - standalone CLI use without the GUI stack
+    _app_logger = None
+
+
+def _warn(message):
+    if _app_logger is not None:
+        _app_logger.warning(message)
+    else:
+        print(message)
+
 
 BASE = "https://editor-api-sg.capcutapi.com"
 VOD_REGION = "sdwdmwlll"
@@ -364,6 +376,41 @@ def checked_json_response(resp, label):
     return data
 
 
+# HTTP statuses worth retrying: transient server / edge errors and rate limits.
+RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+
+
+def request_with_retry(method, url, *, label, retries=4, backoff=1.0, **kwargs):
+    """Perform an HTTP request, retrying transient failures with backoff.
+
+    Retries on connection-level errors and on retryable HTTP statuses
+    (5xx, 429, 408). A response with any other status is returned as-is so
+    the caller's :func:`checked_json_response` can inspect it. Backoff grows
+    exponentially: ``backoff * 2 ** attempt`` seconds.
+    """
+    if requests is None:
+        raise SystemExit("pip install requests")
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            resp = requests.request(method, url, **kwargs)
+        except requests.exceptions.RequestException as exc:  # network/timeout
+            last_error = exc
+            if attempt >= retries:
+                raise RuntimeError(
+                    f"{label} request failed after {attempt + 1} attempt(s): {exc}"
+                ) from exc
+        else:
+            if resp.status_code not in RETRYABLE_STATUS or attempt >= retries:
+                return resp
+            last_error = RuntimeError(f"{label} HTTP {resp.status_code}")
+        delay = backoff * (2 ** attempt)
+        _warn(f"{label}: transient failure ({last_error}); retry {attempt + 1}/{retries} in {delay:.1f}s")
+        time.sleep(delay)
+    # Loop always returns or raises above; guard for safety.
+    raise RuntimeError(f"{label} failed: {last_error}")
+
+
 def vod_signed_headers(method, url, body, creds, device):
     amz_date, http_date = utc_now_for_vod()
     body_bytes = body.encode("utf-8") if isinstance(body, str) else body
@@ -417,7 +464,9 @@ def upload_audio_file(path, device):
     part_crc32 = crc32_hex(data)
 
     url, headers, body_text = upload_sign_request(device)
-    sign_resp = requests.post(url, headers=headers, data=body_text.encode("utf-8"), timeout=60)
+    sign_resp = request_with_retry(
+        "POST", url, label="upload_sign", headers=headers, data=body_text.encode("utf-8"), timeout=60
+    )
     sign_data = checked_json_response(sign_resp, "upload_sign")
     creds = sign_data.get("data") or {}
     for key in ("domain", "access_key_id", "secret_access_key", "session_token", "space_name"):
@@ -433,7 +482,10 @@ def upload_audio_file(path, device):
             "device_platform": "win",
         }
     )
-    apply_resp = requests.get(apply_url, headers=vod_signed_headers("GET", apply_url, b"", creds, device), timeout=60)
+    apply_resp = request_with_retry(
+        "GET", apply_url, label="ApplyUploadInner",
+        headers=vod_signed_headers("GET", apply_url, b"", creds, device), timeout=60,
+    )
     apply_data = checked_json_response(apply_resp, "ApplyUploadInner")
     node = apply_data["Result"]["InnerUploadAddress"]["UploadNodes"][0]
     store = node["StoreInfos"][0]
@@ -446,8 +498,9 @@ def upload_audio_file(path, device):
     transfer_url = f"https://{upload_host}/upload/v1/{store_uri}?" + urlencode(
         {"uploadid": upload_id, "part_number": "0", "phase": "transfer"}
     )
-    transfer_resp = requests.post(
-        transfer_url, headers=upload_binary_headers(upload_auth, part_crc32, device), data=data, timeout=300
+    transfer_resp = request_with_retry(
+        "POST", transfer_url, label="upload transfer",
+        headers=upload_binary_headers(upload_auth, part_crc32, device), data=data, timeout=300,
     )
     checked_json_response(transfer_resp, "upload transfer")
 
@@ -455,8 +508,9 @@ def upload_audio_file(path, device):
         {"uploadmode": "part", "phase": "finish", "uploadid": upload_id}
     )
     finish_body = f"0:{part_crc32}"
-    finish_resp = requests.post(
-        finish_url, headers=upload_finish_headers(upload_auth, device), data=finish_body.encode("utf-8"), timeout=60
+    finish_resp = request_with_retry(
+        "POST", finish_url, label="upload finish",
+        headers=upload_finish_headers(upload_auth, device), data=finish_body.encode("utf-8"), timeout=60,
     )
     checked_json_response(finish_resp, "upload finish")
 
@@ -471,8 +525,8 @@ def upload_audio_file(path, device):
     commit_body = compact_json(
         {"Functions": [{"Input": {"SnapshotTime": 0.0}, "Name": "Snapshot"}], "SessionKey": node["SessionKey"]}
     )
-    commit_resp = requests.post(
-        commit_url,
+    commit_resp = request_with_retry(
+        "POST", commit_url, label="CommitUploadInner",
         headers=vod_signed_headers("POST", commit_url, commit_body.encode("utf-8"), creds, device),
         data=commit_body.encode("utf-8"),
         timeout=120,

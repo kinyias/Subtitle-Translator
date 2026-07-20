@@ -1,13 +1,13 @@
 {
   "theme": "Dark",
-  "default_language": "zh-CN",
+  "default_language": "vi-VN",
   "api_timeout": 60,
   "auto_scroll_logs": true,
-  "window_geometry": "1150x880+130+130",
+  "window_geometry": "1150x880+116+42",
   "ai_base_url": "http://localhost:20128/v1/chat/completions",
   "ai_api_key": "sk-0d1d295eb7ccebbd-2qy7kh-e2934c49",
   "ai_model": "gemini",
   "ai_target_language": "Vietnamese",
   "ai_style_prompt": "Dịch từ tiếng trung sang tiếng việt. Giữ lại tên tiếng anh của nhân vật trong LOL ( Liên Minh Huyền Thoại) Aurora, Volibear, Ornn,... Phong cách dí dỏm.",
-  "use_translation": true
+  "use_translation": false
 }
